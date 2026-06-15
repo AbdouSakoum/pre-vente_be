@@ -1,4 +1,5 @@
 const pool = require('../db/pool');
+const { saveFile } = require('../services/storageService');
 
 // ---- CATEGORIES ----
 async function getCategories(req, res, next) {
@@ -105,7 +106,7 @@ async function createProduct(req, res, next) {
     await client.query('BEGIN');
 
     const productImageUrl = productImage
-      ? `/uploads/${req.tenantId}/article/${productImage.filename}`
+      ? await saveFile(productImage, req.tenantId, 'article')
       : null;
 
     const { rows: [product] } = await client.query(
@@ -121,18 +122,15 @@ async function createProduct(req, res, next) {
         return res.status(400).json({ message: `Prix obligatoire pour la variante ${i + 1}` });
       }
 
-      // Nom: si 1 seule variante → nom du produit, sinon "Produit - NomVariante"
       const variantName = parsedVariants.length === 1
         ? name
         : `${name} - ${v.name || `Variante ${i + 1}`}`;
 
-      // SKU auto-généré
       const sku = `SKU-${Date.now()}-${i + 1}`;
 
-      // Image variante uploadée (champ variant_image_0, variant_image_1, ...)
       const variantImg = req.files?.[`variant_image_${i}`]?.[0];
       const variantImageUrl = variantImg
-        ? `/uploads/${req.tenantId}/article/${variantImg.filename}`
+        ? await saveFile(variantImg, req.tenantId, 'article')
         : null;
 
       const { rows: [variant] } = await client.query(
@@ -171,9 +169,11 @@ async function updateProduct(req, res, next) {
   try {
     await client.query('BEGIN');
 
-    const imageFields = productImage
-      ? `, image_url='/uploads/${req.tenantId}/article/${productImage.filename}'`
-      : '';
+    let imageFields = '';
+    if (productImage) {
+      const url = await saveFile(productImage, req.tenantId, 'article');
+      imageFields = `, image_url='${url}'`;
+    }
 
     const { rows } = await client.query(
       `UPDATE products SET name=$1, description=$2, category_id=$3, is_active=$4, tva_rate=$7${imageFields}
@@ -185,23 +185,24 @@ async function updateProduct(req, res, next) {
       return res.status(404).json({ message: 'Produit introuvable' });
     }
 
-    // Mettre à jour les variantes existantes
     for (let i = 0; i < parsedVariants.length; i++) {
       const v = parsedVariants[i];
       const variantName = parsedVariants.length === 1 ? name : `${name} - ${v.name || `Variante ${i + 1}`}`;
       const variantImg = req.files?.[`variant_image_${i}`]?.[0];
 
       if (v.id) {
-        // Variante existante → UPDATE
-        const imgUpdate = variantImg ? `, image_url='/uploads/${req.tenantId}/article/${variantImg.filename}'` : '';
+        let imgUpdate = '';
+        if (variantImg) {
+          const url = await saveFile(variantImg, req.tenantId, 'article');
+          imgUpdate = `, image_url='${url}'`;
+        }
         await client.query(
           `UPDATE product_variants SET name=$1, price=$2${imgUpdate} WHERE id=$3 AND tenant_id=$4`,
           [variantName, v.price, v.id, req.tenantId]
         );
       } else {
-        // Nouvelle variante → INSERT
         const sku = `SKU-${Date.now()}-${i + 1}`;
-        const variantImageUrl = variantImg ? `/uploads/${req.tenantId}/article/${variantImg.filename}` : null;
+        const variantImageUrl = variantImg ? await saveFile(variantImg, req.tenantId, 'article') : null;
         await client.query(
           `INSERT INTO product_variants (tenant_id, product_id, name, sku, price, image_url)
            VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -212,7 +213,6 @@ async function updateProduct(req, res, next) {
 
     await client.query('COMMIT');
 
-    // Retourner le produit avec ses variantes
     const { rows: [product] } = await client.query(
       `SELECT p.*, c.name AS category_name,
         json_agg(json_build_object('id',v.id,'name',v.name,'sku',v.sku,'price',v.price,'image_url',v.image_url,'is_active',v.is_active)) AS variants
@@ -244,8 +244,8 @@ async function deleteProduct(req, res, next) {
 async function createVariant(req, res, next) {
   const { product_id } = req.params;
   const { name, sku, price } = req.body;
-  const image_url = req.file ? `/uploads/${req.file.filename}` : null;
   try {
+    const image_url = req.file ? await saveFile(req.file, req.tenantId, 'article') : null;
     const { rows } = await pool.query(
       `INSERT INTO product_variants (tenant_id, product_id, name, sku, price, image_url)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
@@ -258,12 +258,15 @@ async function createVariant(req, res, next) {
 async function updateVariant(req, res, next) {
   const { id } = req.params;
   const { name, sku, price, is_active } = req.body;
-  const image_url = req.file ? `/uploads/${req.file.filename}` : undefined;
 
   try {
     const fields = ['name=$1', 'sku=$2', 'price=$3', 'is_active=$4'];
     const values = [name, sku || null, price, is_active ?? true];
-    if (image_url) { fields.push(`image_url=$${values.length + 1}`); values.push(image_url); }
+    if (req.file) {
+      const url = await saveFile(req.file, req.tenantId, 'article');
+      fields.push(`image_url=$${values.length + 1}`);
+      values.push(url);
+    }
     values.push(id, req.tenantId);
 
     const { rows } = await pool.query(
@@ -283,7 +286,6 @@ async function deleteVariant(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// Vue catalogue pour passer commande (avec stock)
 async function getProductsForOrder(req, res, next) {
   try {
     const { rows } = await pool.query(

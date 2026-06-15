@@ -1,0 +1,14 @@
+services:
+  backend:
+    image: abderrazzaksakoum/prevente_be:latest
+    container_name: prevente_backend
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.prod
+    volumes:
+      - uploads:/app/uploads
+
+volumes:
+  uploads:

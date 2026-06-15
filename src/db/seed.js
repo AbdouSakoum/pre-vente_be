@@ -54,15 +54,6 @@ async function seed() {
     );
     console.log('Delivery: livreur@demo.com');
 
-    // Véhicule
-    await client.query(
-      `INSERT INTO vehicles (tenant_id, label, plate, driver_id)
-       VALUES ($1, 'Camionnette 1', 'AB-123-CD', $2)
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, livreur.id]
-    );
-    console.log('Véhicule créé');
-
     // Catégorie + produit démo
     const { rows: [cat] } = await client.query(
       `INSERT INTO categories (tenant_id, name) VALUES ($1, 'Boissons') ON CONFLICT DO NOTHING RETURNING *`,

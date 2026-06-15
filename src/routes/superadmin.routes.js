@@ -16,7 +16,8 @@ router.get('/tenants', async (req, res) => {
         COUNT(DISTINCT o.id) AS order_count,
         f.id AS logo_file_id,
         f.stored_name AS logo_stored_name,
-        f.module AS logo_module
+        f.module AS logo_module,
+        f.url AS logo_url_direct
       FROM tenants t
       LEFT JOIN users u ON u.tenant_id = t.id
       LEFT JOIN orders o ON o.tenant_id = t.id
@@ -26,9 +27,7 @@ router.get('/tenants', async (req, res) => {
     `);
     const rows = result.rows.map(t => ({
       ...t,
-      logo_url: t.logo_stored_name
-        ? `http://localhost:3000/uploads/${t.id}/${t.logo_module}/${t.logo_stored_name}`
-        : null
+      logo_url: t.logo_url_direct || (t.logo_file_id ? `/api/files/${t.logo_file_id}` : null)
     }));
     res.json(rows);
   } catch (err) {
@@ -92,14 +91,7 @@ router.post('/tenants', (req, res, next) => { req.uploadModule = 'societe'; next
 
     await client.query('COMMIT');
 
-    // Sauvegarde logo si fourni — déplace depuis _tmp vers le bon dossier tenant
     if (req.file) {
-      const destDir = path.join('uploads', tenantId, 'societe');
-      fs.mkdirSync(destDir, { recursive: true });
-      const destPath = path.join(destDir, path.basename(req.file.path));
-      fs.renameSync(req.file.path, destPath);
-      req.file.path = destPath;
-
       const savedFile = await fileService.save({
         tenantId,
         module: 'societe',
