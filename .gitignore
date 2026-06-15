@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+app/backend/node_modules/
+app/frontend/node_modules/
+app/mobile/node_modules/
+
+# Environment — ne jamais commiter
+.env
+.env.local
+.env.production
+.env.dev
+.env.prod
+app/backend/.env
+app/backend/.env.dev
+app/backend/.env.prod
+app/backend/.env.production
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build outputs
+app/frontend/dist/
+app/mobile/www/
+app/mobile/.angular/
+app/mobile/android/build/
+app/mobile/android/.gradle/
+app/mobile/android/app/build/
+app/mobile/android/local.properties
+
+# Uploads locaux
+app/backend/uploads/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.env.docker
