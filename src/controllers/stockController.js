@@ -1,4 +1,5 @@
 const pool = require('../db/pool');
+const { generateBonReception } = require('../utils/pdf.generator');
 
 // =====================
 // ENTREPÔT
@@ -137,7 +138,12 @@ async function createArrivage(req, res, next) {
       );
     }
     await client.query('COMMIT');
-    res.status(201).json({ id: arr.id, message: 'Arrivage enregistré' });
+    res.status(201).json({ id: arr.id, message: 'Arrivage enregistre' });
+
+    // Generer le bon de reception automatiquement
+    generateBonReception(arr.id, req.tenantId).catch(err =>
+      console.error('[PDF] Echec bon de reception:', err.message)
+    );
   } catch (err) {
     await client.query('ROLLBACK');
     next(err);

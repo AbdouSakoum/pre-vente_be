@@ -48,6 +48,7 @@ router.put('/clients/:id', auth('admin', 'pre_seller'), clientCtrl.updateClient)
 router.get('/orders', auth(), orderCtrl.getOrders);
 router.get('/orders/:id', auth(), orderCtrl.getOrder);
 router.post('/orders', auth('pre_seller', 'admin'), orderCtrl.createOrder);
+router.put('/orders/:id', auth('pre_seller', 'admin'), orderCtrl.updateOrder);
 router.post('/orders/:id/assign', auth('admin'), orderCtrl.assignOrder);
 router.patch('/orders/:id/status', auth('admin', 'delivery'), orderCtrl.updateOrderStatus);
 

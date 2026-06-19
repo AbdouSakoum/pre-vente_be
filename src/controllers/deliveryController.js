@@ -1,4 +1,5 @@
 const pool = require('../db/pool');
+const { generateBonLivraison } = require('../utils/pdf.generator');
 
 // Générer un bon de livraison, encaisser et déduire le stock entrepôt
 async function generateDeliveryNote(req, res, next) {
@@ -81,6 +82,11 @@ async function generateDeliveryNote(req, res, next) {
       order: { ...updated, lines: order.lines },
       generated_at: note.generated_at
     });
+
+    // Generer le bon de livraison PDF en arriere-plan
+    generateBonLivraison(order_id, req.tenantId).catch(err =>
+      console.error('[PDF] Echec bon de livraison:', err.message)
+    );
   } catch (err) {
     await client.query('ROLLBACK');
     next(err);

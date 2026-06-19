@@ -59,6 +59,8 @@ app.use('/api/fournisseurs', require('./routes/fournisseur.routes'));
 app.use('/api/delivery-notes', require('./routes/delivery.routes'));
 app.use('/api/delivery', require('./routes/delivery.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
+app.use('/api/print-settings', require('./routes/print-settings.routes'));
+app.use('/api/pdf', require('./routes/pdf.routes'));
 app.use('/api/visits', require('./routes/visit.routes'));
 
 app.use((err, req, res, next) => {

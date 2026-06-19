@@ -1,7 +1,8 @@
 const pool = require('../db/pool');
+const { generateBonCommande } = require('../utils/pdf.generator');
 
 async function getOrders(req, res, next) {
-  const { status, delivery_user_id } = req.query;
+  const { status, delivery_user_id, date_from, date_to } = req.query;
   try {
     let q = `
       SELECT o.*,
@@ -25,6 +26,8 @@ async function getOrders(req, res, next) {
 
     if (status) { params.push(status); q += ` AND o.status = $${params.length}`; }
     if (delivery_user_id) { params.push(delivery_user_id); q += ` AND o.delivery_user_id = $${params.length}`; }
+    if (date_from) { params.push(date_from); q += ` AND o.created_at::date >= $${params.length}::date`; }
+    if (date_to)   { params.push(date_to);   q += ` AND o.created_at::date <= $${params.length}::date`; }
 
     q += ' GROUP BY o.id, c.name, c.phone, u1.name, u2.name ORDER BY o.created_at DESC';
 
@@ -74,10 +77,14 @@ async function createOrder(req, res, next) {
       [req.tenantId]
     );
 
-    // Calcul des totaux (TVA par ligne)
-    const total_ht_rounded = parseFloat(lines.reduce((s, l) => s + l.quantity * l.unit_price, 0).toFixed(2));
-    const total_tva = parseFloat(lines.reduce((s, l) => s + l.quantity * l.unit_price * ((l.tva_rate ?? 20) / 100), 0).toFixed(2));
-    const total_ttc = parseFloat((total_ht_rounded + total_tva).toFixed(2));
+    // unit_price = prix TTC (tel que saisi dans le catalogue)
+    // HT = TTC / (1 + tva/100)
+    const total_ttc = parseFloat(lines.reduce((s, l) => s + l.quantity * l.unit_price, 0).toFixed(2));
+    const total_tva = parseFloat(lines.reduce((s, l) => {
+      const lineTTC = l.quantity * l.unit_price;
+      return s + lineTTC - lineTTC / (1 + (l.tva_rate ?? 20) / 100);
+    }, 0).toFixed(2));
+    const total_ht_rounded = parseFloat((total_ttc - total_tva).toFixed(2));
 
     const { rows: [order] } = await client.query(
       `INSERT INTO orders
@@ -102,6 +109,11 @@ async function createOrder(req, res, next) {
 
     await client.query('COMMIT');
     res.status(201).json(order);
+
+    // Génération PDF en arrière-plan (sans bloquer la réponse)
+    generateBonCommande(order.id, req.tenantId).catch(err =>
+      console.error('[PDF] Échec génération bon de commande:', err.message)
+    );
   } catch (err) {
     await client.query('ROLLBACK');
     next(err);
@@ -181,4 +193,53 @@ async function startDelivery(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { getOrders, getOrder, createOrder, assignOrder, updateOrderStatus, startDelivery };
+async function updateOrder(req, res, next) {
+  const { id } = req.params;
+  const { client_id, lines, payment_status, delivery_address, note } = req.body;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: [existing] } = await client.query(
+      `SELECT * FROM orders WHERE id=$1 AND tenant_id=$2`,
+      [id, req.tenantId]
+    );
+    if (!existing) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Commande introuvable' }); }
+    if (existing.payment_status === 'paid') { await client.query('ROLLBACK'); return res.status(403).json({ message: 'Impossible de modifier une commande payée' }); }
+
+    const total_ttc = parseFloat(lines.reduce((s, l) => s + l.quantity * l.unit_price, 0).toFixed(2));
+    const total_tva = parseFloat(lines.reduce((s, l) => {
+      const lineTTC = l.quantity * l.unit_price;
+      return s + lineTTC - lineTTC / (1 + (l.tva_rate ?? 20) / 100);
+    }, 0).toFixed(2));
+    const total_ht = parseFloat((total_ttc - total_tva).toFixed(2));
+
+    await client.query(
+      `UPDATE orders SET client_id=$1, payment_status=$2, delivery_address=$3, note=$4, total_ht=$5, total_tva=$6, total_ttc=$7 WHERE id=$8 AND tenant_id=$9`,
+      [client_id, payment_status, delivery_address, note || null, total_ht, total_tva, total_ttc, id, req.tenantId]
+    );
+
+    await client.query('DELETE FROM order_lines WHERE order_id=$1 AND tenant_id=$2', [id, req.tenantId]);
+    for (const line of lines) {
+      await client.query(
+        'INSERT INTO order_lines (tenant_id, order_id, variant_id, quantity, unit_price, tva_rate) VALUES ($1,$2,$3,$4,$5,$6)',
+        [req.tenantId, id, line.variant_id, line.quantity, line.unit_price, line.tva_rate ?? 20]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    generateBonCommande(id, req.tenantId).catch(err =>
+      console.error('[PDF] Échec régénération bon de commande:', err.message)
+    );
+
+    res.json({ id, total_ht, total_tva, total_ttc });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { getOrders, getOrder, createOrder, updateOrder, assignOrder, updateOrderStatus, startDelivery };

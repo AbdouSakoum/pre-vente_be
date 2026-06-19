@@ -5,7 +5,7 @@ async function getVisits(req, res, next) {
     const { date } = req.query;
     const { rows } = await pool.query(
       `SELECT v.*,
-              c.name AS client_name, c.phone AS client_phone, c.city AS client_city,
+              c.name AS client_name, c.phone AS client_phone, c.city AS client_city, c.address AS client_address,
               c.category AS client_category,
               u.name AS pre_seller_name
        FROM visits v
@@ -22,10 +22,10 @@ async function getVisits(req, res, next) {
 
 async function getMyVisits(req, res, next) {
   try {
-    const { date, client_id } = req.query;
+    const { date, date_from, client_id } = req.query;
     const { rows } = await pool.query(
       `SELECT v.*,
-              c.name AS client_name, c.phone AS client_phone, c.city AS client_city,
+              c.name AS client_name, c.phone AS client_phone, c.city AS client_city, c.address AS client_address,
               c.category AS client_category,
               -- Infos commande liée
               o.order_number, o.total_ht, o.total_tva, o.total_ttc,
@@ -51,8 +51,9 @@ async function getMyVisits(req, res, next) {
          AND v.pre_seller_id = $2
          AND ($3::date IS NULL OR v.visited_at = $3::date)
          AND ($4::uuid IS NULL OR v.client_id = $4::uuid)
+         AND ($5::date IS NULL OR v.visited_at >= $5::date)
        ORDER BY v.created_at DESC`,
-      [req.tenantId, req.user.id, date || null, client_id || null]
+      [req.tenantId, req.user.id, date || null, client_id || null, date_from || null]
     );
     res.json(rows);
   } catch (err) { next(err); }
