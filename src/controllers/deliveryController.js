@@ -97,17 +97,19 @@ async function generateDeliveryNote(req, res, next) {
 
 async function getDeliveryNotes(req, res, next) {
   try {
-    const { rows } = await pool.query(
-      `SELECT dn.*, o.delivery_address, c.name AS client_name,
+    const { date_from, date_to } = req.query;
+    let q = `SELECT dn.*, o.delivery_address, c.name AS client_name,
         u.name AS generated_by_name
        FROM delivery_notes dn
        JOIN orders o ON o.id = dn.order_id
        JOIN clients c ON c.id = o.client_id
        LEFT JOIN users u ON u.id = dn.generated_by
-       WHERE dn.tenant_id = $1
-       ORDER BY dn.generated_at DESC`,
-      [req.tenantId]
-    );
+       WHERE dn.tenant_id = $1`;
+    const params = [req.tenantId];
+    if (date_from) { params.push(date_from); q += ` AND dn.generated_at::date >= $${params.length}::date`; }
+    if (date_to)   { params.push(date_to);   q += ` AND dn.generated_at::date <= $${params.length}::date`; }
+    q += ' ORDER BY dn.generated_at DESC';
+    const { rows } = await pool.query(q, params);
     res.json(rows);
   } catch (err) { next(err); }
 }
@@ -115,6 +117,14 @@ async function getDeliveryNotes(req, res, next) {
 // Commandes du jour assignées au livreur connecté
 async function getMyOrders(req, res, next) {
   try {
+    const period = req.query.period || 'today';
+    const deliveredFilter = {
+      today: `o.delivered_at::date = CURRENT_DATE`,
+      week:  `o.delivered_at >= date_trunc('week', CURRENT_DATE)`,
+      month: `o.delivered_at >= date_trunc('month', CURRENT_DATE)`,
+      all:   `TRUE`,
+    }[period] || `o.delivered_at::date = CURRENT_DATE`;
+
     const { rows } = await pool.query(
       `SELECT o.*,
          c.name AS client_name, c.phone AS client_phone,
@@ -138,9 +148,8 @@ async function getMyOrders(req, res, next) {
          AND ($2::uuid IS NULL OR o.delivery_user_id = $2)
          AND o.status IN ('assigned', 'in_progress', 'delivered')
          AND (
-           o.desired_delivery_date = CURRENT_DATE
-           OR (o.desired_delivery_date IS NULL AND o.created_at::date = CURRENT_DATE)
-           OR o.status IN ('assigned', 'in_progress')
+           o.status IN ('assigned', 'in_progress')
+           OR (o.status = 'delivered' AND ${deliveredFilter})
          )
        GROUP BY o.id, c.name, c.phone, c.address, c.latitude, c.longitude, u.name
        ORDER BY

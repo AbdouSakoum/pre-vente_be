@@ -171,6 +171,137 @@ router.get('/', auth('admin'), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── GET /api/dashboard/mobile ─────────────────────────────────────────────
+// Dashboard mobile : accessible à tous les rôles, données filtrées par rôle
+router.get('/mobile', auth('admin', 'pre_seller', 'delivery', 'stock_manager'), async (req, res, next) => {
+  try {
+    const tid    = req.tenantId;
+    const userId = req.user.id;
+    const role   = req.user.role;
+    const period = req.query.period || 'today';
+
+    let dateFilter = '', dateFilterDelivered = '', dateFilterVisits = '';
+    if (period === 'today') {
+      dateFilter          = `AND DATE(created_at) = CURRENT_DATE`;
+      dateFilterDelivered = `AND DATE(delivered_at) = CURRENT_DATE`;
+      dateFilterVisits    = `AND v.visited_at = CURRENT_DATE`;
+    } else if (period === 'week') {
+      dateFilter          = `AND created_at   >= date_trunc('week',  NOW())`;
+      dateFilterDelivered = `AND delivered_at >= date_trunc('week',  NOW())`;
+      dateFilterVisits    = `AND v.visited_at >= date_trunc('week',  NOW())::date`;
+    } else if (period === 'month') {
+      dateFilter          = `AND created_at   >= date_trunc('month', NOW())`;
+      dateFilterDelivered = `AND delivered_at >= date_trunc('month', NOW())`;
+      dateFilterVisits    = `AND v.visited_at >= date_trunc('month', NOW())::date`;
+    }
+
+    // Filtre selon rôle pour les requêtes métier
+    const userFilter      = (role === 'admin') ? '' : `AND pre_seller_id = '${userId}'`;
+    const deliveryFilter  = (role === 'admin') ? '' : `AND delivery_user_id = '${userId}'`;
+    const visitsUserFilter = (role === 'admin') ? '' : `AND v.pre_seller_id = '${userId}'`;
+
+    const queries = [
+      // KPI commandes
+      pool.query(
+        `SELECT COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status='pending')     AS pending,
+                COUNT(*) FILTER (WHERE status='delivered')   AS delivered
+         FROM orders WHERE tenant_id=$1 ${dateFilter} ${userFilter}`,
+        [tid]
+      ),
+      // KPI livraisons
+      pool.query(
+        `SELECT COUNT(*) FILTER (WHERE status='delivered') AS delivered,
+                COUNT(*) FILTER (WHERE status IN ('assigned','in_progress','delivered')) AS total_assigned
+         FROM orders WHERE tenant_id=$1 ${dateFilter} ${deliveryFilter}`,
+        [tid]
+      ),
+      // KPI CA
+      pool.query(
+        `SELECT COALESCE(SUM(total_ttc),0) AS ca, COALESCE(SUM(paid_amount),0) AS encaisse
+         FROM orders WHERE tenant_id=$1 AND status='delivered' ${dateFilterDelivered} ${deliveryFilter}`,
+        [tid]
+      ),
+      // KPI stock alertes
+      pool.query(
+        `SELECT COALESCE(SUM(quantity),0) AS total,
+                COUNT(*) FILTER (WHERE seuil_alerte IS NOT NULL AND quantity <= seuil_alerte) AS alertes
+         FROM stock_warehouse WHERE tenant_id=$1`,
+        [tid]
+      ),
+      // Visites du pré-vendeur
+      pool.query(
+        `SELECT COUNT(v.id) AS total,
+                COUNT(v.id) FILTER (WHERE v.status='ordered')     AS converties,
+                COUNT(v.id) FILTER (WHERE v.status='closed')      AS perdues,
+                COUNT(v.id) FILTER (WHERE v.status='in_progress') AS en_cours,
+                COALESCE(SUM(o.total_ttc) FILTER (WHERE v.status='ordered' AND o.id IS NOT NULL),0) AS ca_converti
+         FROM visits v
+         LEFT JOIN orders o ON o.id = v.order_id
+         WHERE v.tenant_id=$1 ${dateFilterVisits} ${visitsUserFilter}`,
+        [tid]
+      ),
+      // Top alertes stock
+      pool.query(
+        `SELECT sw.quantity, sw.seuil_alerte, pv.name AS variant_name, p.name AS product_name,
+                CASE WHEN sw.quantity=0 THEN 'rupture'
+                     WHEN sw.quantity <= sw.seuil_alerte*0.3 THEN 'critique'
+                     ELSE 'faible' END AS niveau
+         FROM stock_warehouse sw
+         JOIN product_variants pv ON pv.id=sw.variant_id
+         JOIN products p ON p.id=pv.product_id
+         WHERE sw.tenant_id=$1 AND sw.seuil_alerte IS NOT NULL AND sw.quantity<=sw.seuil_alerte
+         ORDER BY (sw.quantity::float/NULLIF(sw.seuil_alerte,0)) ASC LIMIT 5`,
+        [tid]
+      ),
+      // Activité récente (toutes rôles)
+      pool.query(
+        `SELECT o.order_number, o.status, o.total_ttc, o.created_at, o.delivered_at,
+                c.name AS client_name, u.name AS actor_name
+         FROM orders o
+         JOIN clients c ON c.id=o.client_id
+         LEFT JOIN users u ON u.id=o.pre_seller_id
+         WHERE o.tenant_id=$1 ${userFilter}
+         ORDER BY o.created_at DESC LIMIT 8`,
+        [tid]
+      ),
+    ];
+
+    const [ordersR, delivR, caR, stockR, visitsR, alertsR, activityR] = await Promise.all(queries);
+
+    const o = ordersR.rows[0];
+    const d = delivR.rows[0];
+    const ca = caR.rows[0];
+    const s = stockR.rows[0];
+    const v = visitsR.rows[0];
+
+    res.json({
+      period,
+      kpis: {
+        orders:     { total: +o.total, pending: +o.pending, delivered: +o.delivered },
+        deliveries: { delivered: +d.delivered, total: +d.total_assigned },
+        revenue:    { ca: +ca.ca, encaisse: +ca.encaisse },
+        stock:      { total: +s.total, alertes: +s.alertes },
+      },
+      visites: {
+        total: +v.total, converties: +v.converties,
+        perdues: +v.perdues, en_cours: +v.en_cours,
+        ca_converti: +v.ca_converti,
+      },
+      stock_alerts: alertsR.rows.map(r => ({
+        product_name: r.product_name, variant_name: r.variant_name,
+        quantity: +r.quantity, seuil: +r.seuil_alerte, niveau: r.niveau,
+        pct: r.seuil_alerte > 0 ? Math.round((+r.quantity / +r.seuil_alerte) * 100) : 0,
+      })),
+      activity: activityR.rows.map(r => ({
+        order_number: r.order_number, status: r.status,
+        total_ttc: +r.total_ttc, client_name: r.client_name,
+        actor_name: r.actor_name, created_at: r.created_at, delivered_at: r.delivered_at,
+      })),
+    });
+  } catch (err) { next(err); }
+});
+
 // ─── GET /api/dashboard/badges ─────────────────────────────────────────────
 // Compteurs pour les badges de la sidebar (commandes en attente + alertes stock)
 router.get('/badges', auth('admin', 'stock_manager', 'pre_seller', 'delivery'), async (req, res, next) => {

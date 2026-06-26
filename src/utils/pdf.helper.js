@@ -3,18 +3,34 @@ const fs   = require('fs');
 const pool = require('../db/pool');
 
 /**
- * Lit un fichier image local et retourne une dataURL base64 pour pdfmake.
- * Retourne null si le fichier n'existe pas.
+ * Lit une image (locale ou URL HTTP) et retourne une dataURL base64 pour pdfmake.
+ * Retourne null si introuvable.
  */
-function imageToDataUrl(relativeUrl) {
-  if (!relativeUrl) return null;
+async function imageToDataUrl(urlOrPath) {
+  if (!urlOrPath) return null;
   try {
-    const filePath = path.join(__dirname, '../../', relativeUrl);
-    if (!fs.existsSync(filePath)) return null;
-    const ext  = path.extname(filePath).toLowerCase().replace('.', '');
-    const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-    const data = fs.readFileSync(filePath).toString('base64');
-    return `data:${mime};base64,${data}`;
+    if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+      const https = urlOrPath.startsWith('https') ? require('https') : require('http');
+      const data = await new Promise((resolve, reject) => {
+        https.get(urlOrPath, (res) => {
+          const chunks = [];
+          res.on('data', c => chunks.push(c));
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+          res.on('error', reject);
+        }).on('error', reject);
+      });
+      const ext = path.extname(urlOrPath.split('?')[0]).toLowerCase().replace('.', '');
+      const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      return `data:${mime};base64,${data.toString('base64')}`;
+    } else {
+      const cleanUrl = urlOrPath.startsWith('/') ? urlOrPath.slice(1) : urlOrPath;
+      const filePath = path.join(__dirname, '../../', cleanUrl);
+      if (!fs.existsSync(filePath)) return null;
+      const ext  = path.extname(filePath).toLowerCase().replace('.', '');
+      const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      const data = fs.readFileSync(filePath).toString('base64');
+      return `data:${mime};base64,${data}`;
+    }
   } catch {
     return null;
   }
@@ -39,8 +55,8 @@ async function loadPrintSettings(tenantId) {
 /**
  * Génère l'en-tête du document (logo + infos société + infos client)
  */
-function buildHeader(ps, docTitle, docNumber, date, clientInfo) {
-  const logoDataUrl = imageToDataUrl(ps.logo_url);
+async function buildHeader(ps, docTitle, docNumber, date, clientInfo) {
+  const logoDataUrl = await imageToDataUrl(ps.logo_url);
 
   // Colonne gauche : logo + infos client (construits dynamiquement dans le return)
   const leftCol = [];
@@ -186,8 +202,8 @@ function totRow(label, value) {
  * Bloc signatures : gauche = signature client, droite = cachet société
  * Si cachet disponible, l'image s'affiche dans la case droite.
  */
-function buildSignatureBlock(ps, leftLabel = 'Bon pour accord - Client', rightLabel = 'Cachet & Signature') {
-  const cachetDataUrl = imageToDataUrl(ps.cachet_url);
+async function buildSignatureBlock(ps, leftLabel = 'Bon pour accord - Client', rightLabel = 'Cachet & Signature') {
+  const cachetDataUrl = await imageToDataUrl(ps.cachet_url);
 
   const rightStack = [
     { text: rightLabel, fontSize: 9, color: GRAY },

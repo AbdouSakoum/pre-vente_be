@@ -4,21 +4,20 @@ const pool    = require('../db/pool');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
+const { saveFile, useAzure } = require('../services/storageService');
 
-// ── Upload logo ──────────────────────────────────────────────────────────────
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../../uploads', req.tenantId, 'logo');
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `logo_${Date.now()}${ext}`);
-  },
-});
 const upload = multer({
-  storage,
+  storage: useAzure ? multer.memoryStorage() : multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(__dirname, '../../uploads', req.tenantId, 'logo');
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname);
+      cb(null, `logo_${Date.now()}${ext}`);
+    },
+  }),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (['image/jpeg','image/png','image/webp'].includes(file.mimetype)) cb(null, true);
@@ -95,10 +94,8 @@ router.put('/', auth('admin'), async (req, res, next) => {
 router.post('/logo', auth('admin'), upload.single('logo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'Aucun fichier reçu' });
-
     const tid     = req.tenantId;
-    const logoUrl = `/uploads/${tid}/logo/${req.file.filename}`;
-
+    const logoUrl = await saveFile(req.file, tid, 'logo');
     const result = await pool.query(
       `INSERT INTO print_settings (tenant_id, logo_url)
        VALUES ($1, $2)
@@ -106,7 +103,6 @@ router.post('/logo', auth('admin'), upload.single('logo'), async (req, res, next
        RETURNING *`,
       [tid, logoUrl]
     );
-
     res.json({ logo_url: result.rows[0].logo_url });
   } catch (err) { next(err); }
 });
@@ -139,7 +135,7 @@ router.post('/cachet', auth('admin'), upload.single('cachet'), async (req, res, 
   try {
     if (!req.file) return res.status(400).json({ message: 'Aucun fichier reçu' });
     const tid      = req.tenantId;
-    const cachetUrl = `/uploads/${tid}/logo/${req.file.filename}`;
+    const cachetUrl = await saveFile(req.file, tid, 'cachet');
     const result = await pool.query(
       `INSERT INTO print_settings (tenant_id, cachet_url)
        VALUES ($1, $2)

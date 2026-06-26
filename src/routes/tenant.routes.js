@@ -35,6 +35,38 @@ router.get('/info', async (req, res) => {
   }
 });
 
+// GET /api/tenant/by-subdomain/:subdomain — résolution directe pour login mobile
+router.get('/by-subdomain/:subdomain', async (req, res) => {
+  const { subdomain } = req.params;
+  try {
+    const result = await pool.query(`
+      SELECT t.id, t.name, t.subdomain, t.is_active,
+             f.stored_name AS logo_stored_name,
+             f.module AS logo_module
+      FROM tenants t
+      LEFT JOIN files f ON f.id = t.logo_file_id
+      WHERE t.subdomain = $1
+    `, [subdomain]);
+
+    if (!result.rows.length) return res.status(404).json({ message: 'Entreprise introuvable' });
+    const t = result.rows[0];
+    if (!t.is_active) return res.status(403).json({ message: 'Entreprise désactivée' });
+
+    res.json({
+      tenant: {
+        id: t.id,
+        name: t.name,
+        subdomain: t.subdomain,
+        logo_url: t.logo_stored_name
+          ? `http://localhost:3000/uploads/${t.id}/${t.logo_module}/${t.logo_stored_name}`
+          : null
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // GET /api/tenant/activate/:code — valider un code d'activation mobile
 router.get('/activate/:code', async (req, res) => {
   const { code } = req.params;

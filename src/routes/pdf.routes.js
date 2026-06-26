@@ -73,14 +73,19 @@ router.get('/orders/:id/bon-commande', auth(), async (req, res, next) => {
     const totalHT  = parseFloat((totalTTC / 1.20).toFixed(2));
     const docNum   = `BC-${String(o.order_number || id.slice(0,8)).toUpperCase()}`;
 
+    const [headerBlocks, signatureBlock] = await Promise.all([
+      buildHeader(ps, 'BON DE COMMANDE', docNum, fmtDate(o.created_at), {
+        name: o.client_name, phone: o.client_phone,
+        address: o.client_address, city: o.client_city,
+      }),
+      buildSignatureBlock(ps),
+    ]);
+
     const docDef = {
       pageSize: 'A4', pageMargins: [40, 40, 40, 60],
       styles: STYLES, ...DEFAULT_STYLES,
       content: [
-        ...buildHeader(ps, 'BON DE COMMANDE', docNum, fmtDate(o.created_at), {
-          name: o.client_name, phone: o.client_phone,
-          address: o.client_address, city: o.client_city,
-        }),
+        ...headerBlocks,
         // Vendeur
         o.pre_seller_name ? {
           text: `Pré-vendeur : ${o.pre_seller_name}`,
@@ -97,7 +102,7 @@ router.get('/orders/:id/bon-commande', auth(), async (req, res, next) => {
         buildLinesTable(o.lines),
         buildTotals(totalHT, 20, o.total_ttc),
         { text: '\n' },
-        buildSignatureBlock(ps),
+        signatureBlock,
         ...buildFooter(ps),
       ],
       footer: (page, pages) => ({
@@ -149,14 +154,19 @@ router.get('/orders/:id/bon-livraison', auth(), async (req, res, next) => {
     const totalHT  = parseFloat((totalTTC / 1.20).toFixed(2));
     const docNum   = `BL-${String(o.order_number || id.slice(0,8)).toUpperCase()}`;
 
+    const [headerBlocks, signatureBlock] = await Promise.all([
+      buildHeader(ps, 'BON DE LIVRAISON', docNum, fmtDate(o.delivered_at || o.created_at), {
+        name: o.client_name, phone: o.client_phone,
+        address: o.client_address, city: o.client_city,
+      }),
+      buildSignatureBlock(ps, 'Signature client - Recu conforme', 'Signature livreur'),
+    ]);
+
     const docDef = {
       pageSize: 'A4', pageMargins: [40, 40, 40, 60],
       styles: STYLES, ...DEFAULT_STYLES,
       content: [
-        ...buildHeader(ps, 'BON DE LIVRAISON', docNum, fmtDate(o.delivered_at || o.created_at), {
-          name: o.client_name, phone: o.client_phone,
-          address: o.client_address, city: o.client_city,
-        }),
+        ...headerBlocks,
         o.delivery_name ? {
           text: `Livreur : ${o.delivery_name}`,
           fontSize: 9, color: GRAY, margin: [0, 0, 0, 10],
@@ -168,7 +178,7 @@ router.get('/orders/:id/bon-livraison', auth(), async (req, res, next) => {
         buildLinesTable(o.lines, true),
         buildTotals(totalHT, 20, o.total_ttc),
         { text: '\n' },
-        buildSignatureBlock(ps, 'Signature client - Recu conforme', 'Signature livreur'),
+        signatureBlock,
         ...buildFooter(ps),
       ],
       footer: (page, pages) => ({
@@ -240,14 +250,19 @@ router.get('/orders/:id/facture', auth(), async (req, res, next) => {
     const tva      = parseFloat((totalTTC - totalHT).toFixed(2));
     const resteAPayer = Math.max(0, totalTTC - parseFloat(o.paid_amount || 0));
 
+    const [headerBlocks, signatureBlock] = await Promise.all([
+      buildHeader(ps, 'FACTURE', factureNum, fmtDate(o.delivered_at || o.created_at), {
+        name: o.client_name, phone: o.client_phone,
+        address: o.client_address, city: o.client_city,
+      }),
+      buildSignatureBlock(ps),
+    ]);
+
     const docDef = {
       pageSize: 'A4', pageMargins: [40, 40, 40, 60],
       styles: STYLES, ...DEFAULT_STYLES,
       content: [
-        ...buildHeader(ps, 'FACTURE', factureNum, fmtDate(o.delivered_at || o.created_at), {
-          name: o.client_name, phone: o.client_phone,
-          address: o.client_address, city: o.client_city,
-        }),
+        ...headerBlocks,
         buildLinesTable(o.lines),
         buildTotals(totalHT, 20, totalTTC),
         // Récapitulatif paiement
@@ -267,7 +282,7 @@ router.get('/orders/:id/facture', auth(), async (req, res, next) => {
           margin: [300, 0, 0, 8],
         },
         { text: '\n' },
-        buildSignatureBlock(ps),
+        signatureBlock,
         ...buildFooter(ps),
       ],
       footer: (page, pages) => ({
